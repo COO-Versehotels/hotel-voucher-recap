@@ -1,0 +1,96 @@
+name: Hotel Voucher Recap
+
+# REPO PUBLIC (14 Okt 2026): menit GitHub Actions gratis tanpa batas untuk repo public.
+# SENGAJA tanpa "schedule:" — GitHub mematikan workflow terjadwal di repo public yang 60 hari tanpa commit.
+# Semua jadwal dipicu penjadwal Supabase (pg_cron di proyek Recruitment -> /api/jalankan-collector target voucher):
+#   08.05 & 16.05 WIB ('voucher-pagi') dan 23.45 WIB ('voucher-malam', jaring pengaman sebelum night audit).
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (hanya baca & tampilkan hasil, tidak simpan ke Drive)"
+        type: boolean
+        default: false
+      lookback_days:
+        description: "Cek email berapa hari ke belakang"
+        default: "3"
+      before_days:
+        description: "Tarik ulang email lama: batas atas (hari ke belakang). 0 = sampai sekarang"
+        default: "0"
+      paksa:
+        description: "Jalankan sekarang juga (abaikan jeda hemat kuota 2 jam)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: voucher-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    # HEMAT KUOTA GITHUB (7 Okt 2026): job hanya jalan pada JAM TETAP yang dipicu penjadwal Supabase dengan "paksa":
+    # 08.05, 12.05, 16.05, 20.05 WIB (pg_cron 'voucher-pagi' di proyek Recruitment -> /api/jalankan-collector target voucher),
+    # ditambah jadwal cadangan 23.45 WIB di atas. Pemicu per jam dari Apps Script (tanpa "paksa") DILEWATI dan tidak
+    # memakai menit GitHub. Alasan: jatah 2.000 menit/bulan; tiap jalan ±4 menit.
+    # Jalan manual: centang "paksa" (atau dry_run) agar selalu jalan.
+    if: >-
+      github.event_name == 'schedule' || github.event.inputs.paksa == 'true' || github.event.inputs.dry_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Semua unit dijalankan BERURUTAN dalam 1 job (persiapan cukup sekali -> hemat kuota GitHub).
+    # Unit baru: tambah 1 step "Unit ..." + secrets IMAP_USER_xxx / IMAP_PASS_xxx. Unit tanpa secret otomatis dilewati.
+    env:
+      IMAP_HOST: ${{ secrets.IMAP_HOST }}
+      IMAP_PORT: ${{ secrets.IMAP_PORT }}
+      GAS_URL: ${{ secrets.GAS_URL }}
+      GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+      LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '3' }}
+      BEFORE_DAYS: ${{ github.event.inputs.before_days || '0' }}
+      DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+      PW_LAZY: '1'
+      LOG_PUBLIK: '1'   # repo public: log tanpa nama tamu, harga, nama file & isi error
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # Chromium TIDAK dipasang di sini lagi: dipasang otomatis oleh collector.py hanya bila ada voucher
+      # baru yang perlu dicetak ke PDF (PW_LAZY=1) -> jalan tanpa voucher baru jauh lebih cepat & hemat kuota.
+
+      - name: Unit Verse Lite Gajah Mada
+        if: always()
+        env:
+          UNIT_NAME: "Verse Lite Gajah Mada"
+          IMAP_USER: ${{ secrets.IMAP_USER_LITE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LITE }}
+        run: if [ -z "$IMAP_PASS" ] || [ -z "$IMAP_USER" ]; then echo "Secret belum diisi, dilewati"; else python collector.py; fi
+
+      - name: Unit Oak Tree Mahakam Blok M
+        if: always()
+        env:
+          UNIT_NAME: "Oak Tree Mahakam Blok M"
+          IMAP_USER: ${{ secrets.IMAP_USER_OAK }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_OAK }}
+        run: if [ -z "$IMAP_PASS" ] || [ -z "$IMAP_USER" ]; then echo "Secret belum diisi, dilewati"; else python collector.py; fi
+
+      - name: Unit Verse Hotel Cirebon
+        if: always()
+        env:
+          UNIT_NAME: "Verse Hotel Cirebon"
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}   # server email sendiri (bukan Gmail); alamat & host disimpan di Secrets
+          IMAP_PORT: "993"
+          IMAP_USER: ${{ secrets.IMAP_USER_CRB }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_CRB }}
+        run: if [ -z "$IMAP_PASS" ] || [ -z "$IMAP_USER" ] || [ -z "$IMAP_HOST" ]; then echo "Secret belum diisi, dilewati"; else python collector.py; fi
+
+      - name: Unit Verse Luxe Hotel Wahid Hasyim
+        if: always()
+        env:
+          UNIT_NAME: "Verse Luxe Hotel Wahid Hasyim"
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}   # server email sendiri (bukan Gmail); alamat & host disimpan di Secrets
+          IMAP_PORT: "993"
+          IMAP_USER: ${{ secrets.IMAP_USER_LUXE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LUXE }}
+        run: if [ -z "$IMAP_PASS" ] || [ -z "$IMAP_USER" ] || [ -z "$IMAP_HOST" ]; then echo "Secret belum diisi, dilewati"; else python collector.py; fi

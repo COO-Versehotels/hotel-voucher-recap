@@ -285,6 +285,15 @@ def parse_agoda(L, subject):
     ci = L.find(r"Check-in(?:\s*Check-in)?\s*:?\s*\n?\s*" + _d)
     co = L.find(r"Check-out(?:\s*Check-out)?\s*:?\s*\n?\s*" + _d)
     r["checkin"], r["checkout"] = parse_date(ci), parse_date(co)
+    # Email cancel Agoda berbahasa Indonesia: "Nama Awal Pelanggan: X Nama Akhir Pelanggan: Y ... Ketibaan: October 25, 2026 Keberangkatan: ..."
+    if not r["tamu"]:
+        f2 = L.find(r"(?:Nama Awal Pelanggan|Customer First Name)\s*:\s*([^\n:]+?)\s*(?=Nama Akhir Pelanggan|Customer Last Name|Kota\s*:|City\s*:|\n|$)")
+        l2 = L.find(r"(?:Nama Akhir Pelanggan|Customer Last Name)\s*:\s*([^\n:]+?)\s*(?=Kota\s*:|City\s*:|Negara\s*:|Country\s*:|\n|$)")
+        r["tamu"] = " ".join(x for x in [f2, l2] if x).strip()
+    if not r["checkin"]:
+        r["checkin"] = parse_date(L.find(r"(?:Ketibaan|Arrival(?: date)?)\s*:\s*\n?\s*" + _d))
+    if not r["checkout"]:
+        r["checkout"] = parse_date(L.find(r"(?:Keberangkatan|Departure(?: date)?)\s*:\s*\n?\s*" + _d))
     rt = L.after(r"^Tipe Kamar$|^Room Type$", n=1, skip_re=r"(Tipe Kamar|No\. of Rooms|Jumlah kamar|Occupancy|Tingkat hunian|No\. of Extra Bed|Jumlah Extra Bed:?|"
                  r"Children\S?s age|Child(ren)? age|Usia anak|Umur anak)", max_look=12)
     r["tipe_kamar"] = rt or ""
@@ -716,6 +725,10 @@ def process_message(raw, unit, render_pdf=True):
     s_low = subject.lower()
     if key == "AGODA" and not re.search(r"id pesanan|booking id|pemesanan|reservation|booking confirmation|dibatalkan|cancel", s_low):
         return None, None, "Agoda bukan voucher"
+    # Email tim Customer Experience Agoda ("... ACCOM"): MINTA IZIN hotel membatalkan / mengubah booking -> bukan voucher & belum cancel resmi
+    if key == "AGODA" and (re.search(r"\bACCOM\b", subject) or re.search(
+            r"permintaan dari pelanggan untuk (membatalkan|mengubah)|request from the customer to (cancel|amend|change)", L.text, re.I)):
+        return None, None, "Agoda permintaan pembatalan/perubahan dari tamu (bukan voucher, belum cancel resmi)"
     if key == "TRAVELOKA" and not re.search(r"itinerary", s_low):
         return None, None, "Traveloka bukan voucher"
     if key == "TIKET" and not (pdfs or re.search(r"reservation|reservasi|itinerary|pesanan|cancel|batal", s_low)):

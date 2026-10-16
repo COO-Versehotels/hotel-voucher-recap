@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -47,6 +48,16 @@ SENDERS = {
 }
 # OTA yang sudah punya email langsung -> email Bookandlink untuk OTA ini dilewati (hindari dobel)
 DIRECT_OTAS = {"AGODA", "TRAVELOKA", "CTRIP", "TRIP.COM"}   # Tiket.com tidak: Oak Tree hanya menerima Tiket lewat Bookandlink (dobel dicegah di server)
+# Jaring pengaman (16 Okt 2026): notifikasi Bookandlink untuk OTA di atas biasanya dobel dengan email langsung OTA.
+# Tapi kalau email langsung OTA TIDAK sampai (kasus Traveloka #...6326 Oak Tree 15 Okt), booking hilang dari laporan.
+# Maka: email Bookandlink yang sudah berumur >= BNL_TUNDA_JAM tetap dikirim ke Apps Script -> di sana dibuang bila
+# booking ID yang sama sudah tercatat, atau disimpan sebagai cadangan bila belum ada. Yang lebih muda ditunda (tidak
+# dicatat) supaya dicek lagi run berikutnya, saat email langsung OTA mestinya sudah masuk.
+BNL_TUNDA_JAM = float(os.environ.get("BNL_TUNDA_JAM") or "3")
+BNL_TANDA = "via Bookandlink"   # penanda di Catatan (Apps Script BNL_TANDA_) -> server tahu ini cadangan
+# Batas waktu per unit (16 Okt 2026): run 16.05 WIB 15 Okt macet 55 menit di unit pertama -> semua unit tidak terbaca.
+EMAIL_MAKS_MENIT = float(os.environ.get("EMAIL_MAKS_MENIT") or "9")    # lewat ini: email sisa dilanjut run berikutnya
+UNIT_MAKS_MENIT = float(os.environ.get("UNIT_MAKS_MENIT") or "14")     # lewat ini: unit dihentikan paksa, unit berikutnya jalan
 
 MONTHS = {
     "jan": 1, "january": 1, "januari": 1,
@@ -705,6 +716,32 @@ def finalize(r):
     return r
 
 
+def _umur_jam(msg):
+    """Umur email (jam) dari header Date; None bila tidak terbaca."""
+    try:
+        d = parsedate_to_datetime(str(msg.get("Date", "")))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt.timezone.utc)
+        return (dt.datetime.now(dt.timezone.utc) - d).total_seconds() / 3600
+    except Exception:
+        return None
+
+
+_ADA_OFF = []   # server Apps Script versi lama (belum kenal 'ada_booking') -> tidak ditanya lagi di jalan ini
+
+
+def _ada_booking(unit, bid):
+    """Tanya Apps Script: booking ID ini sudah tercatat? (gagal / server versi lama -> False: simpan, server tetap cegah dobel)"""
+    if not bid or _ADA_OFF:
+        return False
+    try:
+        return bool(gas_post({"action": "ada_booking", "unit": unit, "booking_id": str(bid)}, retries=1).get("ada"))
+    except Exception as e:
+        _ADA_OFF.append(1)
+        log(f"   ~ cek booking tidak tersedia (lanjut simpan, server tetap cegah dobel): {_e(e)}")
+        return False
+
+
 def process_message(raw, unit, render_pdf=True):
     """raw bytes -> (record, pdf_bytes, filename) atau (None, None, alasan) jika dilewati."""
     msg = email.message_from_bytes(raw, policy=email.policy.default)
@@ -750,7 +787,10 @@ def process_message(raw, unit, render_pdf=True):
         r = PARSERS[key](L, subject)
     r["jenis"] = detect_jenis(subject, L.text)
     if key == "BOOKANDLINK" and r.get("_bookandlink_ota") in DIRECT_OTAS and r["jenis"] != "CANCEL":
-        return None, None, f"Bookandlink {r['_bookandlink_ota']} dilewati (sudah ada email langsung OTA)"
+        umur = _umur_jam(msg)
+        if umur is not None and umur < BNL_TUNDA_JAM:
+            return None, None, f"TUNDA: Bookandlink {r['_bookandlink_ota']} (cek lagi setelah {BNL_TUNDA_JAM:g} jam)"
+        r["catatan"].append(BNL_TANDA + " (cadangan bila email langsung OTA tidak ada)")
     r["via_bookandlink"] = (key == "BOOKANDLINK")
     r.pop("_bookandlink_ota", None)
     r = finalize(r)
@@ -1051,6 +1091,10 @@ def _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci):
     log(f"   {len(todo)} email baru untuk diproses")
 
     for k, uid in enumerate(todo):
+        if not backfill and time.time() - _T0 > EMAIL_MAKS_MENIT * 60:
+            log(f"   ⏸ batas {EMAIL_MAKS_MENIT:g} menit/unit: sisa {len(todo) - k} email dilanjut run berikutnya")
+            stats["sisa"] = len(todo) - k
+            return stats["error"] - err0
         if backfill and time.time() - _T0 > BF_STOP_MENIT * 60:   # login ulang otomatis -> tarik ulang bisa sangat lama: dibatasi
             log(f"   ⏸ tarik ulang dijeda (batas {BF_STOP_MENIT} menit/unit), sisa {len(todo) - k} email dilanjut run berikutnya")
             return -1   # belum selesai -> jendela ini diulang run berikutnya (email yang sudah tersimpan dilewati)
@@ -1065,8 +1109,16 @@ def _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci):
                 if not dry_run:
                     rec, pdf, info = process_message(raw, unit, render_pdf=True)
             else:
-                rec, pdf, info = process_message(raw, unit, render_pdf=not dry_run)
+                rec, pdf, info = process_message(raw, unit, render_pdf=False)
+                if rec is not None and not dry_run:
+                    if BNL_TANDA in str(rec.get("catatan") or "") and _ada_booking(unit, rec.get("booking_id")):
+                        rec, pdf, info = None, None, "Duplikat Bookandlink: booking ini sudah tercatat"
+                    else:
+                        rec, pdf, info = process_message(raw, unit, render_pdf=True)
             mid = ids.get(uid) or ""
+            if rec is None and str(info).startswith("TUNDA"):   # belum dicatat -> dicek lagi run berikutnya
+                stats["tunda"] = stats.get("tunda", 0) + 1
+                continue
             if rec is None:
                 log(f"   - lewati UID {uid.decode()}" + ("" if LOG_PUBLIK else f": {info}"))
                 stats["skipped"] += 1
@@ -1092,6 +1144,8 @@ def _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci):
             log(f"   ! ERROR UID {uid!r}: {_e(e)}")
     # Voucher lama yang belum punya catatan harga -> baca ulang email, kirim harganya saja
     for uid in [u for u in uids if ids.get(u) in need_price]:
+        if not backfill and time.time() - _T0 > EMAIL_MAKS_MENIT * 60:
+            break   # isi harga voucher lama tidak mendesak -> lanjut run berikutnya
         try:
             typ, data = M.uid("fetch", uid, "(BODY.PEEK[])")
             raw = next(x[1] for x in data if isinstance(x, tuple))
@@ -1146,6 +1200,19 @@ class _Imap:
             pass
 
 
+def _pasang_batas_unit(unit, menit):
+    """Unit macet (server email / Apps Script / Chromium tidak menjawab) -> dihentikan paksa setelah UNIT_MAKS_MENIT,
+    supaya unit berikutnya tetap jalan. Email yang belum tersimpan otomatis diproses run berikutnya."""
+    def _stop():
+        log(f"   ⛔ {unit}: melewati batas {menit:g} menit -> dihentikan, dilanjut run berikutnya")
+        sys.stdout.flush()
+        os._exit(2)
+    t = threading.Timer(max(menit * 60 - (time.time() - _T0), 1), _stop)
+    t.daemon = True
+    t.start()
+    return t
+
+
 def run(dry_run=False):
     unit = os.environ.get("UNIT_NAME", "Verse Lite Gajah Mada")
     host = os.environ["IMAP_HOST"]
@@ -1175,6 +1242,10 @@ def run(dry_run=False):
     # TARIK ULANG EMAIL LAMA (lookback > 7 hari, atau > 14 hari bila diperpanjang otomatis): hanya voucher yang
     # check-in-nya maks. 15 hari lalu/ke depan yang disimpan; email lain dilewati tanpa dicatat.
     backfill = days > (14 if auto_ext else 7)
+    # tarik ulang (manual / unit baru / sistem sempat berhenti) memang lama -> batasnya lebih longgar
+    bf_aktif = str(state.get("bf_date") or "") > str(state.get("bf_target") or "") and bool(state.get("bf_target"))
+    if not dry_run:
+        _pasang_batas_unit(unit, BF_STOP_MENIT + 8 if (backfill or manual or bf_aktif) else UNIT_MAKS_MENIT)
     since = today - dt.timedelta(days=days)
     before = (today - dt.timedelta(days=bdays)) if bdays else None
     min_ci = (today - dt.timedelta(days=15)).isoformat()   # = REV_BACK_DAYS (14) + 1: voucher telat masih disalin ke folder Rev Updates

@@ -58,6 +58,10 @@ BNL_TANDA = "via Bookandlink"   # penanda di Catatan (Apps Script BNL_TANDA_) ->
 # Batas waktu per unit (16 Okt 2026): run 16.05 WIB 15 Okt macet 55 menit di unit pertama -> semua unit tidak terbaca.
 EMAIL_MAKS_MENIT = float(os.environ.get("EMAIL_MAKS_MENIT") or "9")    # lewat ini: email sisa dilanjut run berikutnya
 UNIT_MAKS_MENIT = float(os.environ.get("UNIT_MAKS_MENIT") or "14")     # lewat ini: unit dihentikan paksa, unit berikutnya jalan
+# Laporan VHP (PDF upload FO) SEMUA unit dibaca paling awal pada step pertama job (17 Okt 2026): unit terakhir dulu baru
+# terbaca ~08.40, sesudah laporan 08.30 -> "Laporan VHP belum ada" padahal FO sudah upload.
+SEMUA_UNIT = [u.strip() for u in (os.environ.get("SEMUA_UNIT") or
+              "Verse Lite Gajah Mada|Oak Tree Mahakam Blok M|Verse Hotel Cirebon|Verse Luxe Hotel Wahid Hasyim").split("|") if u.strip()]
 
 MONTHS = {
     "jan": 1, "january": 1, "januari": 1,
@@ -728,11 +732,17 @@ def _umur_jam(msg):
 
 
 _ADA_OFF = []   # server Apps Script versi lama (belum kenal 'ada_booking') -> tidak ditanya lagi di jalan ini
+_BIDS = {}      # unit -> set Booking ID yang sudah tercatat (dikirim server sekali per run lewat 'check', 17 Okt 2026)
 
 
 def _ada_booking(unit, bid):
-    """Tanya Apps Script: booking ID ini sudah tercatat? (gagal / server versi lama -> False: simpan, server tetap cegah dobel)"""
-    if not bid or _ADA_OFF:
+    """Booking ID ini sudah tercatat? Pakai daftar dari server (sekali per run); server lama -> tanya per email.
+    Gagal -> False: simpan, server tetap cegah dobel."""
+    if not bid:
+        return False
+    if unit in _BIDS:
+        return str(bid) in _BIDS[unit]
+    if _ADA_OFF:
         return False
     try:
         return bool(gas_post({"action": "ada_booking", "unit": unit, "booking_id": str(bid)}, retries=1).get("ada"))
@@ -1084,8 +1094,10 @@ def _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci):
 
     seen, need_price = set(), set()
     if not dry_run and ids:
-        out = gas_post({"action": "check", "message_ids": [v for v in ids.values() if v]})
+        out = gas_post({"action": "check", "unit": unit, "message_ids": [v for v in ids.values() if v]})
         seen = set(out.get("seen", []))
+        if isinstance(out.get("bids"), list):
+            _BIDS[unit] = set(str(b) for b in out["bids"])
         need_price = set(out.get("need_price", []))
     todo = [u for u in uids if not ids.get(u) or ids[u] not in seen]
     log(f"   {len(todo)} email baru untuk diproses")
@@ -1139,6 +1151,8 @@ def _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci):
             gas_post({"action": "save", "record": rec, "filename": info,
                       "pdf_base64": base64.b64encode(pdf).decode() if pdf else ""})
             stats["saved"] += 1
+            if unit in _BIDS and rec.get("booking_id") and rec.get("jenis") != "CANCEL":
+                _BIDS[unit].add(str(rec["booking_id"]))   # salinan Bookandlink berikutnya di run ini langsung dikenali
         except Exception as e:
             stats["error"] += 1
             log(f"   ! ERROR UID {uid!r}: {_e(e)}")
@@ -1213,6 +1227,23 @@ def _pasang_batas_unit(unit, menit):
     return t
 
 
+def _vhp_semua_unit(dry_run):
+    """Sekali per job (penanda file di runner): baca laporan VHP baru semua unit sebelum email diproses."""
+    tanda = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", f"hvr_vhp_{os.environ.get('GITHUB_RUN_ID') or 'lokal'}")
+    if dry_run or os.path.exists(tanda):
+        return
+    try:
+        open(tanda, "w").close()
+    except OSError:
+        pass
+    for u in SEMUA_UNIT:
+        log(f"== Laporan VHP lebih dulu | {u}")
+        try:
+            arrival_sync(u, dry_run)
+        except Exception as e:
+            log("   ~ laporan VHP gagal (dicoba lagi di step unitnya):", _e(e))
+
+
 def run(dry_run=False):
     unit = os.environ.get("UNIT_NAME", "Verse Lite Gajah Mada")
     host = os.environ["IMAP_HOST"]
@@ -1246,6 +1277,7 @@ def run(dry_run=False):
     bf_aktif = str(state.get("bf_date") or "") > str(state.get("bf_target") or "") and bool(state.get("bf_target"))
     if not dry_run:
         _pasang_batas_unit(unit, BF_STOP_MENIT + 8 if (backfill or manual or bf_aktif) else UNIT_MAKS_MENIT)
+        _vhp_semua_unit(dry_run)
     since = today - dt.timedelta(days=days)
     before = (today - dt.timedelta(days=bdays)) if bdays else None
     min_ci = (today - dt.timedelta(days=15)).isoformat()   # = REV_BACK_DAYS (14) + 1: voucher telat masih disalin ke folder Rev Updates

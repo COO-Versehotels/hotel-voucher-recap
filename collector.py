@@ -495,6 +495,12 @@ def parse_bookandlink_web(L, subject):
     r["booking_id"] = (re.search(r"#\s*(\d{5,})", subject or "") or [None, ""])[1] or \
         L.find(r"Reservation\s*number\s*\n?\s*#?\s*(\d{5,})") or ""
     name = L.after(r"^Guest details$|^Guest details\b") or ""
+    # Booking >1 kamar: "Guest details / Room 1: / SAHRU MASKUR / Room 2: ..." -> nama tamu, bukan "Room 1" (18 Okt 2026)
+    m = re.search(r"Guest details\b[\s:]*Room\s*\d+\s*:\s*([^\n]+?)\s*(?=Room\s*\d+\s*:|\n|$)", L.text, re.I)
+    if m and m.group(1).strip():
+        name = m.group(1)
+    elif re.fullmatch(r"Room\s*\d+\s*:?", name.strip(), re.I):
+        name = L.after(r"^Room\s*1\s*:?$") or ""
     r["tamu"] = re.sub(r"\s+", " ", name).strip()
     lab_in = r"^(Check[- ]?in(\s*date)?|Arrival(\s*date)?|Tanggal check[- ]?in|Kedatangan)\b"
     lab_out = r"^(Check[- ]?out(\s*date)?|Departure(\s*date)?|Tanggal check[- ]?out|Keberangkatan)\b"
@@ -514,6 +520,12 @@ def parse_bookandlink_web(L, subject):
         r["kamar"], r["tipe_kamar"] = m.group(1), m.group(2).strip()
     else:
         r["tipe_kamar"] = L.after(r"^Room\s*type\b|^Room\s*name\b|^Tipe kamar\b") or ""
+    n_kamar = len(set(re.findall(r"Room\s*(\d+)\s*-\s*CONFIRM", L.text, re.I)))
+    if n_kamar > 1:   # beberapa kamar dalam 1 reservasi -> jumlah kamar & semua tipe kamarnya
+        r["kamar"] = str(n_kamar)
+        tipe = list(dict.fromkeys(t.strip() for t in re.findall(r"Room\s*Type\s*\(\s*\d+\s*Rooms?\s*\)\s*([^\n]+)", L.text, re.I)))
+        if tipe:
+            r["tipe_kamar"] = " + ".join(tipe)
     m = re.search(r"Grand total\s*\n?\s*:?\s*(IDR|USD|SGD)?\s*([\d.,]+)", L.text, re.I) or \
         re.search(r"Invoice total\s*\n?\s*(IDR|USD|SGD)?\s*([\d.,]+)", L.text, re.I)
     if m:

@@ -526,6 +526,15 @@ def parse_bookandlink_web(L, subject):
         tipe = list(dict.fromkeys(t.strip() for t in re.findall(r"Room\s*Type\s*\(\s*\d+\s*Rooms?\s*\)\s*([^\n]+)", L.text, re.I)))
         if tipe:
             r["tipe_kamar"] = " + ".join(tipe)
+        # harga TIAP kamar ("Total reservation IDR 395,214" per kamar) -> dicocokkan per kamar dengan rate VHP
+        tot = [to_number(x) for x in re.findall(r"Total reservation\s*(?:IDR|USD|SGD)?\s*([\d.,]+)", L.text, re.I)]
+        tot = [x for x in tot if x]
+        try:
+            n_mlm = max(1, (dt.date.fromisoformat(str(r["checkout"])[:10]) - dt.date.fromisoformat(str(r["checkin"])[:10])).days)
+        except (ValueError, TypeError):
+            n_mlm = 1
+        if len(tot) >= n_kamar:
+            r["rate_per_malam"] = "|".join(str(int(round(x / n_mlm))) for x in tot)
     m = re.search(r"Grand total\s*\n?\s*:?\s*(IDR|USD|SGD)?\s*([\d.,]+)", L.text, re.I) or \
         re.search(r"Invoice total\s*\n?\s*(IDR|USD|SGD)?\s*([\d.,]+)", L.text, re.I)
     if m:

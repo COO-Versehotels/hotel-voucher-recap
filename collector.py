@@ -799,6 +799,10 @@ def process_message(raw, unit, render_pdf=True):
         return None, None, "Agoda permintaan pembatalan/perubahan dari tamu (bukan voucher, belum cancel resmi)"
     if key == "TRAVELOKA" and not re.search(r"itinerary", s_low):
         return None, None, "Traveloka bukan voucher"
+    # Email tim hotelops Traveloka: MINTA PERSETUJUAN hotel untuk membatalkan -> belum cancel resmi
+    if key == "TRAVELOKA" and (re.search(r"pengajuan pembatalan|cancellation request", s_low) or re.search(
+            r"mohon konfirmasi persetujuan hotel|konfirmasi persetujuan hotel via email", L.text, re.I)):
+        return None, None, "Traveloka pengajuan pembatalan (menunggu persetujuan hotel, belum cancel resmi)"
     if key == "TIKET" and not (pdfs or re.search(r"reservation|reservasi|itinerary|pesanan|cancel|batal", s_low)):
         return None, None, "Tiket bukan voucher"
     if key == "BOOKANDLINK" and re.search(r"payment status|status pembayaran", s_low):

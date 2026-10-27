@@ -674,16 +674,45 @@ _browser = None
 
 
 _CHROMIUM_SIAP = False
+_CHROMIUM_GAGAL = False
 def _pastikan_chromium():
     """HEMAT KUOTA: Chromium baru dipasang saat benar-benar ada voucher yang perlu dicetak ke PDF
     (bukan di setiap jalan). Aktif bila env PW_LAZY=1 (diset di workflow)."""
-    global _CHROMIUM_SIAP
+    global _CHROMIUM_SIAP, _CHROMIUM_GAGAL
     if _CHROMIUM_SIAP or os.environ.get("PW_LAZY") != "1":
         return
+    if _CHROMIUM_GAGAL:   # sudah gagal di jalan ini -> jangan habiskan waktu memasang ulang untuk tiap email
+        raise RuntimeError("Chromium tidak tersedia di jalan ini")
     import subprocess
     log("   … memasang Chromium (hanya karena ada voucher baru untuk dicetak)")
-    subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 27 Okt 2026: "install --with-deps" (apt-get) sempat MACET 7 menit -> unit Lite kena batas 14 menit, lalu
+    # unit Oak gagal mencetak (pemasangan setengah jalan). Sekarang: unduh Chromium saja (cepat, tanpa apt) dengan
+    # batas waktu, coba buka; library sistem (apt) hanya dipasang bila memang kurang, juga dengan batas waktu.
+    def _jalan(args, detik):
+        try:
+            return subprocess.run([sys.executable, "-m", "playwright"] + args, check=False, timeout=detik,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        except subprocess.TimeoutExpired:
+            log(f"   ~ pemasangan Chromium ({' '.join(args)}) melewati {detik} dtk, dihentikan")
+            return False
+
+    def _bisa_buka():
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                p.chromium.launch().close()
+            return True
+        except Exception:
+            return False
+
+    t0 = time.time()
+    _jalan(["install", "chromium"], 180)
+    if not _bisa_buka():
+        _jalan(["install-deps", "chromium"], 240)
+        if not _bisa_buka():
+            _CHROMIUM_GAGAL = True
+            raise RuntimeError("Chromium tidak bisa dipasang (dicoba lagi run berikutnya)")
+    log(f"   … Chromium siap ({time.time() - t0:.0f} dtk)")
     _CHROMIUM_SIAP = True
 
 

@@ -1,0 +1,47 @@
+name: Cari Voucher Paket Makan
+
+# Dijalankan MANUAL saja. Membaca mailbox FO (read-only) dan mencari voucher paket makan
+# (All Inclusive / Full Board / Lunch / Dinner). Hasil dienkripsi di log (repo public) -> dibaca oleh COO.
+on:
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: "Unit"
+        type: choice
+        options: ["Verse Luxe Hotel Wahid Hasyim"]
+        default: "Verse Luxe Hotel Wahid Hasyim"
+      email_dari:
+        description: "Email diterima sejak (YYYY-MM-DD)"
+        default: "2026-01-01"
+      email_sampai:
+        description: "Email diterima sebelum (YYYY-MM-DD)"
+        default: "2026-11-01"
+
+concurrency:
+  group: cari-paket-makan
+  cancel-in-progress: false
+
+jobs:
+  cari:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install beautifulsoup4==4.12.3 pdfplumber==0.11.4 pynacl==1.5.0
+      - name: Cari voucher paket makan
+        env:
+          UNIT_NAME: ${{ github.event.inputs.unit }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}
+          IMAP_PORT: "993"
+          IMAP_USER: ${{ secrets.IMAP_USER_LUXE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LUXE }}
+          EMAIL_DARI: ${{ github.event.inputs.email_dari }}
+          EMAIL_SAMPAI: ${{ github.event.inputs.email_sampai }}
+          CEK_DARI: "2026-06-01"
+          CEK_SAMPAI: "2026-06-16"
+          LOG_PUBLIK: "1"
+          PAKET_PUBKEY: "xwcl2llWfDcycvkO9I+BoyvNz2Wzp7VgUiTu97NAa18="
+        run: python cari_paket_makan.py

@@ -1,0 +1,43 @@
+name: Cetak Voucher Audit
+
+# Dijalankan MANUAL. Cetak ulang voucher tertentu (daftar Message-ID di audit_luxe_ids.json) jadi PDF
+# dan simpan ke folder audit di Drive COO lewat Apps Script ('audit_pdf'). Tidak masuk Log Voucher.
+on:
+  workflow_dispatch:
+    inputs:
+      daftar:
+        description: "File daftar Message-ID"
+        default: "audit_luxe_ids.json"
+      folder:
+        description: "Nama folder di Drive"
+        default: "Audit All Inclusive Luxe"
+
+concurrency:
+  group: cetak-audit
+  cancel-in-progress: false
+
+jobs:
+  cetak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Cetak voucher audit
+        env:
+          UNIT_NAME: "Verse Luxe Hotel Wahid Hasyim"
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}
+          IMAP_PORT: "993"
+          IMAP_USER: ${{ secrets.IMAP_USER_LUXE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LUXE }}
+          GAS_URL: ${{ secrets.GAS_URL }}
+          GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+          AUDIT_IDS: ${{ github.event.inputs.daftar }}
+          AUDIT_FOLDER: ${{ github.event.inputs.folder }}
+          LOG_PUBLIK: "1"
+          PW_LAZY: "1"
+        run: python cetak_audit.py

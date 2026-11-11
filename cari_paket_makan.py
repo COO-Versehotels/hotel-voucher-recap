@@ -130,22 +130,12 @@ def main():
                 continue
         except Exception:
             continue
-        # 1) pencarian di server: email OTA yang memuat kata paket makan
-        kata = " ".join(["OR"] * (len(BODY_KATA) - 1)) + " " + " ".join(f'BODY "{k}"' for k in BODY_KATA)
-        cocok = set()
+        # Pencarian kata di server TIDAK bisa diandalkan (isi email ter-encode -> 11/11 voucher uji terlewat, 11 Nov 2026).
+        # Maka SEMUA email OTA pada rentang tanggal dibaca penuh & dicek di sini.
+        cocok, ubah, uji = set(), set(), set()
         for dom in C.SENDERS:
-            cocok.update(cari(M, f'({rng} FROM "{dom}" {kata})'))
-        # 2) email cancel / ubah (subjek) -> versi terakhir booking paket makan
-        ubah = set()
-        for dom in C.SENDERS:
-            for w in ("cancel", "batal", "modif", "amend", "ubah", "perubahan", "change"):
-                ubah.update(cari(M, f'({rng} FROM "{dom}" SUBJECT "{w}")'))
-        # 3) jendela uji: SEMUA email OTA dibaca penuh -> cek apakah pencarian server ada yang terlewat
-        uji = set()
-        if cek_dari and cek_sampai:
-            for dom in C.SENDERS:
-                uji.update(cari(M, f'(SINCE "{tgl(cek_dari)}" BEFORE "{tgl(cek_sampai)}" FROM "{dom}")'))
-        log(f"   folder #{folders.index(fo) + 1}: {len(cocok)} kandidat paket, {len(ubah)} ubah/cancel, {len(uji)} email uji")
+            uji.update(cari(M, f'({rng} FROM "{dom}")'))
+        log(f"   folder #{folders.index(fo) + 1}: {len(uji)} email OTA")
         semua = sorted(cocok | ubah | uji, key=int)
         for k, uid in enumerate(semua):
             try:
@@ -154,15 +144,10 @@ def main():
                 if rec is None:
                     continue
                 mid = rec.get("message_id") or ""
-                if uid in uji:
-                    stat["uji_email"] += 1
-                    if ada:
-                        stat["uji_paket"] += 1
-                        if uid not in cocok:
-                            stat["uji_terlewat"] += 1
+                stat["uji_email"] += 1
                 if mid and mid in mids:
                     continue
-                if ada or uid in ubah:
+                if ada or rec.get("jenis") in ("CANCEL", "UBAH"):
                     if mid:
                         mids.add(mid)
                     rec["_paket"] = ada

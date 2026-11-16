@@ -1,0 +1,56 @@
+name: Cari Email Agoda
+
+# Manual. Mencari email konfirmasi Agoda untuk booking yang hanya tercatat lewat notifikasi Bookandlink,
+# di SEMUA folder mailbox FO (termasuk Spam/Junk). Read-only; log hanya 4 digit terakhir nomor booking.
+on:
+  workflow_dispatch:
+
+jobs:
+  cari:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verse Lite Gajah Mada
+        if: always()
+        env:
+          UNIT_NAME: "Verse Lite Gajah Mada"
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_LITE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LITE }}
+          AGODA_IDS: "2059367904,2059549961,2059611170,1071018754,2063633203,2063675146,2064769467,724237207"
+        run: python cari_agoda.py
+      - name: Oak Tree Mahakam Blok M
+        if: always()
+        env:
+          UNIT_NAME: "Oak Tree Mahakam Blok M"
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_OAK }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_OAK }}
+          AGODA_IDS: "2059353932,2059540980,2062154738,2062198917,2062331385,2063619045,2063656632,2064805440,2064811534,2064829754,2064904469"
+        run: python cari_agoda.py
+      - name: Verse Hotel Cirebon
+        if: always()
+        env:
+          UNIT_NAME: "Verse Hotel Cirebon"
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_CRB }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_CRB }}
+          AGODA_IDS: "2059423841,2059425306,2059436525,2062126501,2062318056,1790911594,1790920220,2063644025,2064742744,2064752631,2064795837,2064805049,2064810493,2066052547"
+        run: python cari_agoda.py
+      - name: Verse Luxe Hotel Wahid Hasyim
+        if: always()
+        env:
+          UNIT_NAME: "Verse Luxe Hotel Wahid Hasyim"
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_LUXE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LUXE }}
+          AGODA_IDS: "2059349416,2059386536,2059494163,2059562232,2059597569,2059614279,1790802855,2063500838,1792515206,2063530031,719365231,2063572031,2064742198"
+        run: python cari_agoda.py

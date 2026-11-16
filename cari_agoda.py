@@ -30,7 +30,7 @@ def main():
             typ, d = M.uid("search", None, f'(SUBJECT "{b}")')
             uids = d[0].split() if typ == "OK" and d and d[0] else []
             for u in uids:
-                typ, h = M.uid("fetch", u, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+                typ, h = M.uid("fetch", u, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
                 raw = next((x[1] for x in h if isinstance(x, tuple)), b"")
                 msg = email.message_from_bytes(raw)
                 frm = (msg.get("From") or "").lower()
@@ -41,7 +41,7 @@ def main():
                     tgl = email.utils.parsedate_to_datetime(msg.get("Date")).strftime("%d/%m %H:%M")
                 except Exception:
                     tgl = "?"
-                hasil[b].append(f"{fo.strip(chr(34))}:{src}:{jenis}:{tgl}")
+                hasil[b].append(f"{fo.strip(chr(34))}:{src}:{jenis}:{tgl}" + (f" | subj=[{re.sub(chr(92)+'d', '#', msg.get('Subject') or '')[:90]}] mid={(msg.get('Message-ID') or '').strip()}" if src == "agoda" else ""))
                 ketemu += 1
         print(f"   folder {fo.strip(chr(34))}: {n_ag} email Agoda sejak 1 Okt, {ketemu} email cocok nomor booking", flush=True)
     M.logout()

@@ -13,7 +13,7 @@ Mode:
   python collector.py --test a.eml .. -> uji parser dari file .eml lokal (PDF disimpan ke ./test_output)
 
 Environment (GitHub Secrets):
-  IMAP_HOST, IMAP_PORT (default 993), IMAP_USER, IMAP_PASS, IMAP_FOLDER (default INBOX)
+  IMAP_HOST, IMAP_PORT (default 993), IMAP_USER, IMAP_PASS, IMAP_FOLDERS (default: INBOX + folder arsip yang ditemukan otomatis)
   UNIT_NAME   (mis. "Verse Lite Gajah Mada")
   GAS_URL     (URL Web App Apps Script), GAS_TOKEN (token rahasia, sama dengan di Apps Script)
   LOOKBACK_DAYS (default 3)
@@ -1268,6 +1268,39 @@ class _Imap:
             pass
 
 
+ARSIP_RE = re.compile(r"(^|[./])(archives?|arsip)$", re.I)
+
+
+def folder_email(host, port, user, pw):
+    """Folder yang dibaca: INBOX + folder arsip (16 Nov 2026: FO memindah email voucher ke Archive -> dulu tidak terbaca).
+    Folder arsip dicari sendiri dari daftar folder server (penanda \\Archive, atau nama Archive/Archives/Arsip,
+    termasuk "INBOX.Archive"). Bisa ditimpa dengan env IMAP_FOLDERS="INBOX|Nama Folder"."""
+    paksa = os.environ.get("IMAP_FOLDERS") or os.environ.get("IMAP_FOLDER")
+    if paksa:
+        return [f.strip() for f in paksa.split("|") if f.strip()]
+    hasil = ["INBOX"]
+    try:
+        M = imaplib.IMAP4_SSL(host, port, timeout=60)
+        M.login(user, pw)
+        typ, data = M.list()
+        M.logout()
+        for ln in data or []:
+            t = ln.decode("utf-8", "replace") if isinstance(ln, bytes) else str(ln)
+            m = re.match(r'\((.*?)\)\s+(?:"[^"]*"|NIL)\s+(.+)$', t)
+            if not m:
+                continue
+            flags, nama = m.group(1), m.group(2).strip()
+            if nama.startswith('"') and nama.endswith('"'):
+                nama = nama[1:-1].replace('\\"', '"')
+            if "\\Noselect" in flags or nama in hasil:
+                continue
+            if "\\Archive" in flags or ARSIP_RE.search(nama):
+                hasil.append(nama)
+    except Exception as e:
+        log("   ~ daftar folder email tidak terbaca (hanya INBOX):", _e(e))
+    return hasil
+
+
 def _pasang_batas_unit(unit, menit):
     """Unit macet (server email / Apps Script / Chromium tidak menjawab) -> dihentikan paksa setelah UNIT_MAKS_MENIT,
     supaya unit berikutnya tetap jalan. Email yang belum tersimpan otomatis diproses run berikutnya."""
@@ -1302,7 +1335,6 @@ def run(dry_run=False):
     unit = os.environ.get("UNIT_NAME", "Verse Lite Gajah Mada")
     host = os.environ["IMAP_HOST"]
     port = int(os.environ.get("IMAP_PORT") or "993")
-    folder = os.environ.get("IMAP_FOLDER") or "INBOX"
     today = dt.date.today()
     days = int(os.environ.get("LOOKBACK_DAYS") or "3")
     bdays = int(os.environ.get("BEFORE_DAYS") or "0")   # batas atas jendela (0 = sampai sekarang), untuk memecah per jendela
@@ -1339,10 +1371,30 @@ def run(dry_run=False):
     log(f"== Hotel Voucher Recap | {unit} | {host} | sejak {_tgl(since)}" + (f" s/d {_tgl(before)}" if before else "") +
         f" | dry_run={dry_run}" + (f" | TARIK ULANG (check-in >= {min_ci})" if backfill else "") +
         (f" | diperpanjang otomatis: terakhir berhasil {state.get('last_ok')}" if auto_ext else ""))
-    M = _Imap(host, port, os.environ["IMAP_USER"], os.environ["IMAP_PASS"], folder)   # login ulang otomatis bila terputus
+    user, pw = os.environ["IMAP_USER"], os.environ["IMAP_PASS"]
+    folders = folder_email(host, port, user, pw)
+    log(f"   folder dibaca: {len(folders)} ({'INBOX + arsip' if len(folders) > 1 else 'INBOX saja'})" +
+        ("" if LOG_PUBLIK else f" {folders}"))
 
     stats = {"saved": 0, "skipped": 0, "error": 0}
+    M = _Imap(host, port, user, pw, folders[0])   # INBOX; login ulang otomatis bila terputus
     _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci)
+    # Sesudah INBOX: folder arsip. Email yang sama (Message-ID) tidak disimpan dua kali - dicek di Apps Script,
+    # jadi email yang dipindah FO dari INBOX ke Archive tidak dobel.
+    for fd in folders[1:]:
+        try:
+            Ma = _Imap(host, port, user, pw, fd)
+        except Exception as e:
+            log("   ~ folder arsip tidak bisa dibuka (dilewati):", _e(e))
+            continue
+        log("   · folder arsip")
+        try:
+            _proses_email(Ma, unit, since, before, backfill, dry_run, stats, min_ci)
+        except Exception as e:
+            stats["error"] += 1
+            log("   ! folder arsip gagal dibaca:", _e(e))
+        finally:
+            Ma.logout()
 
     # OTOMATIS 2 - unit baru: email lama (pesanan yang dibuat sebelum sistem jalan) ditarik ulang sendiri,
     # satu jendela per jalan, sampai tanggal target yang ditetapkan Apps Script.

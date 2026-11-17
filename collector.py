@@ -1155,6 +1155,11 @@ def _proses_email(M, unit, since, before, backfill, dry_run, stats, min_ci):
         need_price = set(out.get("need_price", []))
     todo = [u for u in uids if not ids.get(u) or ids[u] not in seen]
     log(f"   {len(todo)} email baru untuk diproses")
+    # 17 Nov 2026: antrean menumpuk -> booking hari ini (paling baru) terlewat laporan 08.30. Email 36 jam terakhir
+    # diproses DULU (urut lama->baru supaya BARU/UBAH/CANCEL satu booking tetap berurutan), baru sisa antrean lama.
+    if not backfill and todo:
+        baru = set(imap_uids(M, _tgl(dt.date.today() - dt.timedelta(days=1))))
+        todo = [u for u in todo if u in baru] + [u for u in todo if u not in baru]
 
     for k, uid in enumerate(todo):
         if not backfill and time.time() - _T0 > EMAIL_MAKS_MENIT * 60:
@@ -1268,13 +1273,13 @@ class _Imap:
             pass
 
 
-ARSIP_RE = re.compile(r"(^|[./])(archives?|arsip)$", re.I)
+ARSIP_RE = re.compile(r"(^|[./])(archives?|arsip)([./]|$)", re.I)   # termasuk subfolder: INBOX.Archive.2026
 
 
 def folder_email(host, port, user, pw):
     """Folder yang dibaca: INBOX + folder arsip (16 Nov 2026: FO memindah email voucher ke Archive -> dulu tidak terbaca).
     Folder arsip dicari sendiri dari daftar folder server (penanda \\Archive, atau nama Archive/Archives/Arsip,
-    termasuk "INBOX.Archive"). Bisa ditimpa dengan env IMAP_FOLDERS="INBOX|Nama Folder"."""
+    termasuk subfoldernya seperti "INBOX.Archive.2026"). Bisa ditimpa dengan env IMAP_FOLDERS="INBOX|Nama Folder"."""
     paksa = os.environ.get("IMAP_FOLDERS") or os.environ.get("IMAP_FOLDER")
     if paksa:
         return [f.strip() for f in paksa.split("|") if f.strip()]
@@ -1332,6 +1337,7 @@ def _vhp_semua_unit(dry_run):
 
 
 def run(dry_run=False):
+    global _T0
     unit = os.environ.get("UNIT_NAME", "Verse Lite Gajah Mada")
     host = os.environ["IMAP_HOST"]
     port = int(os.environ.get("IMAP_PORT") or "993")
@@ -1362,8 +1368,9 @@ def run(dry_run=False):
     # tarik ulang (manual / unit baru / sistem sempat berhenti) memang lama -> batasnya lebih longgar
     bf_aktif = str(state.get("bf_date") or "") > str(state.get("bf_target") or "") and bool(state.get("bf_target"))
     if not dry_run:
-        _pasang_batas_unit(unit, BF_STOP_MENIT + 8 if (backfill or manual or bf_aktif) else UNIT_MAKS_MENIT)
         _vhp_semua_unit(dry_run)
+        _T0 = time.time()   # 17 Nov 2026: waktu baca laporan VHP semua unit tidak memotong jatah unit pertama (Lite)
+        _pasang_batas_unit(unit, BF_STOP_MENIT + 8 if (backfill or manual or bf_aktif) else UNIT_MAKS_MENIT)
     since = today - dt.timedelta(days=days)
     before = (today - dt.timedelta(days=bdays)) if bdays else None
     min_ci = (today - dt.timedelta(days=15)).isoformat()   # = REV_BACK_DAYS (14) + 1: voucher telat masih disalin ke folder Rev Updates

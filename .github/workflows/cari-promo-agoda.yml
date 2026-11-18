@@ -1,0 +1,81 @@
+name: Cari Promo Agoda
+
+# Manual, READ-ONLY. Cari voucher Agoda berpromo tertentu (default "Mega Sale") sejak tanggal tertentu di semua folder
+# email voucher unit. Log publik hanya jumlah; detail (nama tamu, harga) dienkripsi dengan laporan_pub.pem dan
+# disimpan sebagai artifact 1 hari.
+on:
+  workflow_dispatch:
+    inputs:
+      promo:
+        description: "Nama promo di voucher"
+        default: "Mega Sale"
+      since:
+        description: "Sejak tanggal (format IMAP, mis. 01-Nov-2026)"
+        default: "01-Nov-2026"
+
+jobs:
+  cari:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q beautifulsoup4==4.12.3 pdfplumber==0.11.4
+      - name: Verse Lite Gajah Mada
+        if: always()
+        env:
+          UNIT_NAME: "Verse Lite Gajah Mada"
+          PROMO: ${{ inputs.promo }}
+          SINCE: ${{ inputs.since }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_LITE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LITE }}
+        run: python cari_promo_agoda.py
+      - name: Oak Tree Mahakam Blok M
+        if: always()
+        env:
+          UNIT_NAME: "Oak Tree Mahakam Blok M"
+          PROMO: ${{ inputs.promo }}
+          SINCE: ${{ inputs.since }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_OAK }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_OAK }}
+        run: python cari_promo_agoda.py
+      - name: Verse Hotel Cirebon
+        if: always()
+        env:
+          UNIT_NAME: "Verse Hotel Cirebon"
+          PROMO: ${{ inputs.promo }}
+          SINCE: ${{ inputs.since }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_CRB }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_CRB }}
+        run: python cari_promo_agoda.py
+      - name: Verse Luxe Hotel Wahid Hasyim
+        if: always()
+        env:
+          UNIT_NAME: "Verse Luxe Hotel Wahid Hasyim"
+          PROMO: ${{ inputs.promo }}
+          SINCE: ${{ inputs.since }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST_VH }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_LUXE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LUXE }}
+        run: python cari_promo_agoda.py
+      - name: Enkripsi hasil
+        if: always()
+        run: |
+          tar czf hasil.tgz hasil
+          openssl cms -encrypt -binary -aes256 -in hasil.tgz -out hasil.tgz.enc -outform DER laporan_pub.pem
+          rm -rf hasil hasil.tgz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hasil-terenkripsi
+          path: hasil.tgz.enc
+          retention-days: 1

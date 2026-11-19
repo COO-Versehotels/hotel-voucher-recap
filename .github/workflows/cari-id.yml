@@ -1,0 +1,41 @@
+name: Cari Booking ID
+
+# Manual, READ-ONLY. Cari satu booking ID di semua folder mailbox satu unit. Log hanya waktu email, pengirim, subjek.
+on:
+  workflow_dispatch:
+    inputs:
+      booking_id:
+        description: "Booking ID"
+        required: true
+      unit:
+        description: "Unit"
+        type: choice
+        options: [CRB, LITE, OAK, LUXE]
+        default: CRB
+      cek_sejak:
+        description: "Baca penuh email OTA sejak (format IMAP)"
+        default: "01-Oct-2026"
+      cek_sampai:
+        description: "sampai sebelum (format IMAP)"
+        default: "21-Nov-2026"
+
+jobs:
+  cari:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q beautifulsoup4==4.12.3 pdfplumber==0.11.4
+      - name: Cari
+        env:
+          BOOKING_ID: ${{ inputs.booking_id }}
+          CEK_SEJAK: ${{ inputs.cek_sejak }}
+          CEK_SAMPAI: ${{ inputs.cek_sampai }}
+          IMAP_HOST: ${{ (inputs.unit == 'CRB' || inputs.unit == 'LUXE') && secrets.IMAP_HOST_VH || secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ inputs.unit == 'CRB' && secrets.IMAP_USER_CRB || inputs.unit == 'LUXE' && secrets.IMAP_USER_LUXE || inputs.unit == 'OAK' && secrets.IMAP_USER_OAK || secrets.IMAP_USER_LITE }}
+          IMAP_PASS: ${{ inputs.unit == 'CRB' && secrets.IMAP_PASS_CRB || inputs.unit == 'LUXE' && secrets.IMAP_PASS_LUXE || inputs.unit == 'OAK' && secrets.IMAP_PASS_OAK || secrets.IMAP_PASS_LITE }}
+        run: python cari_id.py

@@ -1,0 +1,51 @@
+name: Cari Voucher Sarapan
+
+# Manual, READ-ONLY. Cari voucher OTA yang menginap pada rentang tanggal tertentu + keterangan paket makannya
+# (Breakfast / Room Only). Log publik hanya jumlah; detail dienkripsi dengan laporan_pub.pem (artifact 1 hari).
+on:
+  workflow_dispatch:
+    inputs:
+      inap_dari:
+        description: "Malam pertama (YYYY-MM-DD)"
+        default: "2026-12-07"
+      inap_sampai:
+        description: "Malam terakhir (YYYY-MM-DD)"
+        default: "2026-12-31"
+      email_sejak:
+        description: "Baca email sejak (format IMAP)"
+        default: "01-Jan-2025"
+
+jobs:
+  cari:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q beautifulsoup4==4.12.3 pdfplumber==0.11.4
+      - name: Verse Lite Gajah Mada
+        env:
+          UNIT_NAME: "Verse Lite Gajah Mada"
+          INAP_DARI: ${{ inputs.inap_dari }}
+          INAP_SAMPAI: ${{ inputs.inap_sampai }}
+          EMAIL_SEJAK: ${{ inputs.email_sejak }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ secrets.IMAP_USER_LITE }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS_LITE }}
+        run: python cari_sarapan.py
+      - name: Enkripsi hasil
+        if: always()
+        run: |
+          mkdir -p hasil
+          tar czf hasil.tgz hasil
+          openssl cms -encrypt -binary -aes256 -in hasil.tgz -out hasil.tgz.enc -outform DER laporan_pub.pem
+          rm -rf hasil hasil.tgz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hasil-terenkripsi
+          path: hasil.tgz.enc
+          retention-days: 1

@@ -18,6 +18,10 @@ on:
       cek_sampai:
         description: "sampai sebelum (format IMAP)"
         default: "21-Nov-2026"
+      simpan_eml:
+        description: "Simpan email yang cocok (terenkripsi) sebagai artifact"
+        type: boolean
+        default: false
 
 jobs:
   cari:
@@ -34,8 +38,22 @@ jobs:
           BOOKING_ID: ${{ inputs.booking_id }}
           CEK_SEJAK: ${{ inputs.cek_sejak }}
           CEK_SAMPAI: ${{ inputs.cek_sampai }}
+          SIMPAN_EML: ${{ inputs.simpan_eml && '1' || '0' }}
           IMAP_HOST: ${{ (inputs.unit == 'CRB' || inputs.unit == 'LUXE') && secrets.IMAP_HOST_VH || secrets.IMAP_HOST }}
           IMAP_PORT: ${{ secrets.IMAP_PORT || '993' }}
           IMAP_USER: ${{ inputs.unit == 'CRB' && secrets.IMAP_USER_CRB || inputs.unit == 'LUXE' && secrets.IMAP_USER_LUXE || inputs.unit == 'OAK' && secrets.IMAP_USER_OAK || secrets.IMAP_USER_LITE }}
           IMAP_PASS: ${{ inputs.unit == 'CRB' && secrets.IMAP_PASS_CRB || inputs.unit == 'LUXE' && secrets.IMAP_PASS_LUXE || inputs.unit == 'OAK' && secrets.IMAP_PASS_OAK || secrets.IMAP_PASS_LITE }}
         run: python cari_id.py
+      - name: Enkripsi hasil
+        if: ${{ inputs.simpan_eml }}
+        run: |
+          mkdir -p hasil
+          tar czf hasil.tgz hasil
+          openssl cms -encrypt -binary -aes256 -in hasil.tgz -out hasil.tgz.enc -outform DER laporan_pub.pem
+          rm -rf hasil hasil.tgz
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.simpan_eml }}
+        with:
+          name: hasil-terenkripsi
+          path: hasil.tgz.enc
+          retention-days: 1

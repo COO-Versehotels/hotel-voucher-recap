@@ -77,6 +77,12 @@ def main():
                         pass
             if BID in isi or u in uids:
                 ketemu[(fo, u)] = info(msg) + (("isi" if BID in isi else "server-saja"),)
+                if os.environ.get("SIMPAN_EML") == "1":   # disimpan ke hasil/ lalu DIENKRIPSI oleh workflow
+                    os.makedirs("hasil", exist_ok=True)
+                    with open(f"hasil/{len(ketemu):02d}_{re.sub(r'[^A-Za-z0-9]', '_', fo)}_{u.decode()}.eml", "wb") as f:
+                        f.write(raw)
+                lamp = [n for n, _ in pdfs] + [p.get_filename() for p in msg.walk() if p.get_filename() and not p.get_filename().lower().endswith('.pdf')]
+                print(f"      lampiran: {len(lamp)} file {[re.sub(r'[0-9]{6,}', '#', x or '') for x in lamp]}", flush=True)
         print(f"   folder {fo}: {n_scan} email dibaca", flush=True)
     M.logout()
     print(f"== HASIL #{BID}: {len(ketemu)} email", flush=True)

@@ -9,7 +9,8 @@ import datetime as dt, email, email.policy, email.utils, imaplib, os, re, sys
 os.environ.setdefault("LOG_PUBLIK", "1")
 import collector as C  # noqa: E402
 
-BID = os.environ["BOOKING_ID"].strip()
+BIDS = [x.strip() for x in os.environ["BOOKING_ID"].split(",") if x.strip()]
+BID = BIDS[0]
 SEJAK = os.environ.get("CEK_SEJAK") or "01-Oct-2026"
 SAMPAI = os.environ.get("CEK_SAMPAI") or "20-Nov-2026"
 WIB = dt.timezone(dt.timedelta(hours=7))
@@ -38,7 +39,7 @@ def main():
         if n.startswith('"') and n.endswith('"'):
             n = n[1:-1]
         fl.append(n)
-    print(f"== cari #{BID} di {len(fl)} folder: {fl}", flush=True)
+    print(f"== cari {BIDS} di {len(fl)} folder: {fl}", flush=True)
     ketemu = {}
     for fo in fl:
         try:
@@ -47,7 +48,7 @@ def main():
         except Exception:
             continue
         uids = set()
-        for kr in (f'(SUBJECT "{BID}")', f'(BODY "{BID}")', f'(TEXT "{BID}")'):
+        for kr in [k for b in BIDS for k in (f'(SUBJECT "{b}")', f'(TEXT "{b}")')]:
             try:
                 typ, d = M.uid("search", None, kr)
                 if typ == "OK" and d and d[0]:
@@ -69,14 +70,17 @@ def main():
             msg = email.message_from_bytes(raw, policy=email.policy.default)
             html, text, pdfs, _ = C.get_parts(msg)
             isi = str(msg.get("Subject") or "") + "\n" + (html or "") + "\n" + (text or "")
-            if BID not in isi:
+            low = isi.lower()
+            if not any(b.lower() in low for b in BIDS):
                 for _, b in pdfs:
                     try:
                         isi += C.pdf_text(b)
                     except Exception:
                         pass
-            if BID in isi or u in uids:
-                ketemu[(fo, u)] = info(msg) + (("isi" if BID in isi else "server-saja"),)
+            low = isi.lower()
+            cocok = [b for b in BIDS if b.lower() in low]
+            if cocok or u in uids:
+                ketemu[(fo, u)] = info(msg) + ((",".join(cocok) if cocok else "server-saja"),)
                 if os.environ.get("SIMPAN_EML") == "1":   # disimpan ke hasil/ lalu DIENKRIPSI oleh workflow
                     os.makedirs("hasil", exist_ok=True)
                     with open(f"hasil/{len(ketemu):02d}_{re.sub(r'[^A-Za-z0-9]', '_', fo)}_{u.decode()}.eml", "wb") as f:
@@ -85,7 +89,7 @@ def main():
                 print(f"      lampiran: {len(lamp)} file {[re.sub(r'[0-9]{6,}', '#', x or '') for x in lamp]}", flush=True)
         print(f"   folder {fo}: {n_scan} email dibaca", flush=True)
     M.logout()
-    print(f"== HASIL #{BID}: {len(ketemu)} email", flush=True)
+    print(f"== HASIL {BIDS}: {len(ketemu)} email", flush=True)
     for (fo, u), (t, dom, subj, cara) in sorted(ketemu.items(), key=lambda x: x[1][0]):
         print(f"   [{fo}] {t} | dari {dom} | {subj} | cocok:{cara}", flush=True)
 

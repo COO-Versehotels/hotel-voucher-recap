@@ -9,8 +9,18 @@ import datetime as dt, email, email.policy, email.utils, imaplib, os, re, sys
 os.environ.setdefault("LOG_PUBLIK", "1")
 import collector as C  # noqa: E402
 
+import hashlib
+# Istilah dipisah koma. Nama tamu WAJIB dikirim sebagai hash: h:<sha256 dari kata huruf kecil> supaya tidak tampil di log publik.
 BIDS = [x.strip() for x in os.environ["BOOKING_ID"].split(",") if x.strip()]
-BID = BIDS[0]
+HASH = {x[2:].lower(): x for x in BIDS if x.startswith("h:")}
+BIDS = [x for x in BIDS if not x.startswith("h:")]
+BID = BIDS[0] if BIDS else ""
+RAHASIA = bool(HASH) or os.environ.get("SIMPAN_EML") == "1"
+
+
+def cocok_hash(teks):
+    tok = set(re.findall(r"[a-z]{3,}", teks.lower()))
+    return [HASH[h] for h in (hashlib.sha256(t.encode()).hexdigest() for t in tok) if h in HASH]
 SEJAK = os.environ.get("CEK_SEJAK") or "01-Oct-2026"
 SAMPAI = os.environ.get("CEK_SAMPAI") or "20-Nov-2026"
 WIB = dt.timezone(dt.timedelta(hours=7))
@@ -39,7 +49,7 @@ def main():
         if n.startswith('"') and n.endswith('"'):
             n = n[1:-1]
         fl.append(n)
-    print(f"== cari {BIDS} di {len(fl)} folder: {fl}", flush=True)
+    print(f"== cari {len(BIDS)} ID + {len(HASH)} nama (hash) di {len(fl)} folder: {fl}", flush=True)
     ketemu = {}
     for fo in fl:
         try:
@@ -71,14 +81,14 @@ def main():
             html, text, pdfs, _ = C.get_parts(msg)
             isi = str(msg.get("Subject") or "") + "\n" + (html or "") + "\n" + (text or "")
             low = isi.lower()
-            if not any(b.lower() in low for b in BIDS):
+            if not any(b.lower() in low for b in BIDS) and not cocok_hash(isi):
                 for _, b in pdfs:
                     try:
                         isi += C.pdf_text(b)
                     except Exception:
                         pass
             low = isi.lower()
-            cocok = [b for b in BIDS if b.lower() in low]
+            cocok = [b for b in BIDS if b.lower() in low] + [f"nama#{list(HASH.values()).index(h)+1}" for h in cocok_hash(isi)]
             if cocok or u in uids:
                 ketemu[(fo, u)] = info(msg) + ((",".join(cocok) if cocok else "server-saja"),)
                 if os.environ.get("SIMPAN_EML") == "1":   # disimpan ke hasil/ lalu DIENKRIPSI oleh workflow
@@ -86,12 +96,21 @@ def main():
                     with open(f"hasil/{len(ketemu):02d}_{re.sub(r'[^A-Za-z0-9]', '_', fo)}_{u.decode()}.eml", "wb") as f:
                         f.write(raw)
                 lamp = [n for n, _ in pdfs] + [p.get_filename() for p in msg.walk() if p.get_filename() and not p.get_filename().lower().endswith('.pdf')]
-                print(f"      lampiran: {len(lamp)} file {[re.sub(r'[0-9]{6,}', '#', x or '') for x in lamp]}", flush=True)
+                if not RAHASIA:
+                    print(f"      lampiran: {len(lamp)} file {[re.sub(r'[0-9]{6,}', '#', x or '') for x in lamp]}", flush=True)
         print(f"   folder {fo}: {n_scan} email dibaca", flush=True)
     M.logout()
-    print(f"== HASIL {BIDS}: {len(ketemu)} email", flush=True)
-    for (fo, u), (t, dom, subj, cara) in sorted(ketemu.items(), key=lambda x: x[1][0]):
-        print(f"   [{fo}] {t} | dari {dom} | {subj} | cocok:{cara}", flush=True)
+    print(f"== HASIL: {len(ketemu)} email", flush=True)
+    baris = [f"[{fo}] uid {u.decode() if isinstance(u, bytes) else u} | {t} | dari {dom} | {subj} | cocok:{cara}"
+             for (fo, u), (t, dom, subj, cara) in sorted(ketemu.items(), key=lambda x: x[1][0])]
+    if RAHASIA:   # detail (subjek bisa berisi nama tamu) hanya ke file terenkripsi
+        os.makedirs("hasil", exist_ok=True)
+        with open("hasil/hasil.txt", "w") as f:
+            f.write("\n".join(baris))
+        print("   (detail disimpan terenkripsi)", flush=True)
+    else:
+        for b in baris:
+            print("  ", b, flush=True)
 
 
 if __name__ == "__main__":

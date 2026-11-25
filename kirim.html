@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Kirim Laporan Transaksi FO ke WhatsApp</title>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<style>
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f2ee;color:#1c1c1a}
+.wrap{max-width:820px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:4px 0 12px}
+.btn{display:block;width:100%;box-sizing:border-box;min-height:52px;border:0;border-radius:10px;font-size:16px;font-weight:700;margin:8px 0;cursor:pointer}
+.wa{background:#25d366;color:#0b1f1a}.abu{background:#e5e1d8;color:#1c1c1a}
+.btn:disabled{opacity:.5}
+.info{font-size:13px;color:#55534e;line-height:1.5;margin:6px 0 12px}
+.ok{background:#dcfce7;padding:10px;border-radius:8px;font-size:14px;display:none;margin:8px 0}
+pre{white-space:pre-wrap;background:#fff;border:1px solid #d9d5cc;border-radius:8px;padding:12px;font-family:inherit;font-size:13px;line-height:1.45}
+#prev img{width:100%;border:1px solid #d9d5cc;border-radius:6px;background:#fff}
+#src{position:absolute;left:-10000px;top:0}
+h2{font-size:15px;margin:18px 0 6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1 id="judul">Memuat laporan…</h1>
+<div class="info" id="status">Mengambil data laporan…</div>
+<button class="btn wa" id="bShare" disabled>📲 Bagikan ke WhatsApp (teks + JPG)</button>
+<button class="btn abu" id="bText" disabled>Bagikan teks saja</button>
+<button class="btn abu" id="bCopy" disabled>Salin teks</button>
+<button class="btn abu" id="bJpg" disabled>Download JPG</button>
+<div class="ok" id="ok"></div>
+<div class="info">Di HP: pilih <b>WhatsApp</b>, lalu grup/kontak. Kalau teks tidak ikut terkirim bersama gambar, teks sudah tersalin otomatis: tempel (paste) di kolom pesan. Di laptop: JPG ter-download dan teks tersalin, lalu tempel di WhatsApp Web dan lampirkan JPG.</div>
+<h2 id="hJpg" style="display:none">Lampiran JPG</h2>
+<div id="prev"></div>
+<h2>Teks WhatsApp</h2>
+<pre id="teks"></pre>
+</div>
+<div id="src"></div>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search), id = q.get('id') || '', u = q.get('u') || '';
+  var $ = function (x) { return document.getElementById(x); };
+  var D = null, FILE = null, URLJPG = null;
+  function pesan(t) { var o = $('ok'); o.textContent = t; o.style.display = 'block'; }
+  function salin(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(t).then(function () { return true; }, function () { return fallback(t); });
+    return Promise.resolve(fallback(t));
+  }
+  function fallback(t) { var a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); var r = false; try { r = document.execCommand('copy'); } catch (e) {} a.remove(); return r; }
+  function unduh() { if (!URLJPG) return; var a = document.createElement('a'); a.href = URLJPG; a.download = D.file || 'Tindak Lanjut.jpg'; document.body.appendChild(a); a.click(); a.remove(); }
+  if (!/^[a-f0-9]{40}$/.test(id) || !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(u)) { $('judul').textContent = 'Link tidak valid'; $('status').textContent = 'Buka tombol "Kirim ke WhatsApp" dari email laporan.'; return; }
+  fetch(u + '?wa=' + id).then(function (r) { return r.json(); }).then(function (j) {
+    if (!j.ok) throw new Error(j.error || 'gagal');
+    D = j.data; $('judul').textContent = D.judul; $('teks').textContent = D.text; document.title = D.judul;
+    ['bText', 'bCopy'].forEach(function (b) { $(b).disabled = false; });
+    if (!D.html) { $('status').textContent = 'Tidak ada temuan yang perlu ditindaklanjuti, jadi tidak ada lampiran JPG.'; $('bShare').textContent = '📲 Bagikan ke WhatsApp'; $('bShare').disabled = false; return; }
+    $('status').textContent = 'Membuat gambar JPG…';
+    $('src').innerHTML = D.html;
+    return html2canvas($('src').firstElementChild, { scale: 2, backgroundColor: '#ffffff' }).then(function (cv) {
+      return new Promise(function (ok) { cv.toBlob(function (b) { ok(b); }, 'image/jpeg', 0.9); });
+    }).then(function (blob) {
+      FILE = new File([blob], D.file || 'Tindak Lanjut.jpg', { type: 'image/jpeg' });
+      URLJPG = URL.createObjectURL(blob);
+      $('prev').innerHTML = '<img alt="Lampiran tindak lanjut" src="' + URLJPG + '">'; $('hJpg').style.display = 'block';
+      $('status').textContent = 'Siap dikirim.';
+      ['bShare', 'bJpg'].forEach(function (b) { $(b).disabled = false; });
+    });
+  }).catch(function (e) { $('judul').textContent = 'Laporan tidak bisa dimuat'; $('status').textContent = String(e.message || e); });
+
+  $('bShare').onclick = function () {
+    salin(D.text);   // cadangan bila WhatsApp tidak menyertakan teks bersama gambar
+    if (FILE && navigator.canShare && navigator.canShare({ files: [FILE] })) {
+      navigator.share({ files: [FILE], text: D.text, title: D.judul }).catch(function () {});
+    } else if (!FILE && navigator.share) {
+      navigator.share({ text: D.text }).catch(function () {});
+    } else {
+      if (FILE) unduh();
+      pesan('JPG sudah ter-download dan teks sudah tersalin. Buka WhatsApp, tempel teks, lalu lampirkan JPG.');
+    }
+  };
+  $('bText').onclick = function () {
+    if (navigator.share) navigator.share({ text: D.text }).catch(function () {});
+    else salin(D.text).then(function () { pesan('Teks tersalin. Tempel di WhatsApp.'); });
+  };
+  $('bCopy').onclick = function () { salin(D.text).then(function () { pesan('Teks tersalin.'); }); };
+  $('bJpg').onclick = unduh;
+})();
+</script>
+</body>
+</html>

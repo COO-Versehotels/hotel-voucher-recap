@@ -36,6 +36,8 @@ from email.utils import parsedate_to_datetime
 
 from bs4 import BeautifulSoup
 
+from jurnal_fo import parse_jurnal_pdf
+
 # ----------------------------------------------------------------------------
 # Konfigurasi
 # ----------------------------------------------------------------------------
@@ -1082,7 +1084,26 @@ def arrival_sync(unit, dry_run=False):
     saved = 0
     for f in files:
         try:
-            kind, rows = parse_arrival_pdf(base64.b64decode(f["pdf_base64"]))
+            data = base64.b64decode(f["pdf_base64"])
+            # 25 Nov 2026: Jurnal FO VHP (F/O Journal Transaction) -> tab Jurnal FO (Laporan Transaksi FO)
+            try:
+                jr = parse_jurnal_pdf(data)
+            except Exception as e:
+                jr = None
+                log(f"   ~ baca Jurnal FO gagal: {_e(e)}")
+            if jr is not None:
+                rows_j = [r for r in jr["rows"] if not re.match(r"lodging", r["desc"], re.I)]   # Lodging = duplikat Room Charge
+                total = round(sum(r["amount"] for r in jr["rows"]), 2)
+                cocok = jr["grand"] is None or abs(total - jr["grand"]) < 2
+                log(f"   # {f['date']} {'(file)' if LOG_PUBLIK else f['name']}: Jurnal FO {jr['dari']}..{jr['sampai']}, "
+                    f"{len(jr['rows'])} transaksi" + ("" if cocok else " (TOTAL TIDAK COCOK dengan Grand TOTAL)"))
+                if not dry_run:
+                    out = gas_post({"action": "jurnal_save", "unit": unit, "file_id": f["file_id"], "stamp": f["stamp"],
+                                    "hotel": jr["hotel"], "dari": jr["dari"], "sampai": jr["sampai"], "rows": rows_j})
+                    if out.get("unit") and out["unit"] != unit:
+                        log("   ! Jurnal FO ini milik unit lain:", out["unit"])
+                continue
+            kind, rows = parse_arrival_pdf(data)
             log(f"   # {f['date']} {'(file)' if LOG_PUBLIK else f['name']}: " + (f"laporan VHP ({kind}), {len(rows)} tamu" if kind else "bukan laporan VHP"))
             if not dry_run:
                 gas_post({"action": "arrival_save", "unit": unit, "date": f["date"], "file_id": f["file_id"],

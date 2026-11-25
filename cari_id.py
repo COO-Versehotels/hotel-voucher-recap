@@ -66,7 +66,7 @@ def main():
             except Exception as e:
                 print("   search gagal", fo, kr, type(e).__name__)
         cand = set()
-        for dom in C.SENDERS:
+        for dom in list(C.SENDERS) + ['booking.com', 'expedia', 'mgholiday', 'mgbedbank']:
             typ, d = M.uid("search", None, f'(SINCE "{SEJAK}" BEFORE "{SAMPAI}" FROM "{dom}")')
             if typ == "OK" and d and d[0]:
                 cand.update(d[0].split())
@@ -88,7 +88,8 @@ def main():
                     except Exception:
                         pass
             low = isi.lower()
-            cocok = [b for b in BIDS if b.lower() in low] + [f"nama#{list(HASH.values()).index(h)+1}" for h in cocok_hash(isi)]
+            angka = re.sub(r'(?<=\d)[\s.\-](?=\d)', '', isi)   # 6777.440.303 / 6777 440 303 -> 6777440303
+            cocok = [b for b in BIDS if b.lower() in low or (b.isdigit() and b in angka)] + [f"nama#{list(HASH.values()).index(h)+1}" for h in cocok_hash(isi)]
             if cocok or u in uids:
                 ketemu[(fo, u)] = info(msg) + ((",".join(cocok) if cocok else "server-saja"),)
                 if os.environ.get("SIMPAN_EML") == "1":   # disimpan ke hasil/ lalu DIENKRIPSI oleh workflow

@@ -1101,7 +1101,7 @@ def vhp_saja(dry_run=False):
         log(f"== Laporan VHP | {u}")
         for _ in range(6):
             try:
-                n = arrival_sync(u, dry_run)
+                n = arrival_sync(u, dry_run, revisi=False)
             except Exception as e:
                 log("   ~ laporan VHP gagal:", _e(e))
                 break
@@ -1109,7 +1109,7 @@ def vhp_saja(dry_run=False):
                 break
 
 
-def arrival_sync(unit, dry_run=False):
+def arrival_sync(unit, dry_run=False, revisi=True):
     """Baca PDF yang di-upload FO di folder tanggal. Laporan VHP dikenali dari ISI file (nama file bebas)."""
     try:
         files = gas_post({"action": "arrival_pending", "unit": unit}).get("files", [])
@@ -1157,7 +1157,7 @@ def arrival_sync(unit, dry_run=False):
                 saved += 1 if (kind and rows) else 0
         except Exception as e:
             log(f"   ! gagal baca {'(file)' if LOG_PUBLIK else f.get('name')}: {_e(e)}")
-    if saved and not dry_run:
+    if saved and not dry_run and revisi:   # mode ringan (vhp-cek): revisi Sheet dikerjakan robot voucher berikutnya
         try:
             out = gas_post({"action": "arrival_done"}, retries=2)
             if out.get("revisi"):

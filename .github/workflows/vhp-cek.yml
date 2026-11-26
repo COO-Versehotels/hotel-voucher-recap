@@ -18,7 +18,7 @@ concurrency:
 jobs:
   vhp:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       GAS_URL: ${{ secrets.GAS_URL }}
       GAS_TOKEN: ${{ secrets.GAS_TOKEN }}

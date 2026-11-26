@@ -1,0 +1,33 @@
+name: Cek Laporan VHP (Night Audit)
+
+# 26 Nov 2026: mode ringan — hanya membaca laporan VHP baru (Guest In House, Room Revenue Breakdown,
+# Jurnal FO) dari folder Drive semua unit, TANPA membaca email. Supaya status laporan Night Audit
+# sudah terbaca sebelum notifikasi 06.30 WIB, dan laporan yang terlambat segera tercatat + dicek.
+# Repo public: menit GitHub Actions gratis.
+# Jadwal (UTC): 22.10–23.40 = 05.10–06.40 WIB, lalu 00.10–10.40 = 07.10–17.40 WIB, tiap 30 menit.
+on:
+  schedule:
+    - cron: "10,40 22-23 * * *"
+    - cron: "10,40 0-10 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: vhp-cek
+  cancel-in-progress: false
+
+jobs:
+  vhp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GAS_URL: ${{ secrets.GAS_URL }}
+      GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+      LOG_PUBLIK: '1'   # repo public: log tanpa nama tamu & nama file
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python collector.py --vhp

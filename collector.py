@@ -1074,13 +1074,48 @@ def _parse_vhp_text(text):
     return kind, rows
 
 
+REV_BD = re.compile(r"Room\s*Revenue\s*Breakdown", re.I)
+BILLDATE = re.compile(r"Bill\s*date\s*:\s*(\d{2})/(\d{2})/(\d{2})", re.I)
+
+
+def parse_rev_breakdown(data):
+    """VHP "Today's Room Revenue Breakdown Report" -> tanggal bisnis (Billdate) 'yyyy-mm-dd', atau None."""
+    import pdfplumber
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        if not pdf.pages:
+            return None
+        head = (pdf.pages[0].extract_text() or "")[:1500]
+    if not REV_BD.search(head):
+        return None
+    m = BILLDATE.search(head)
+    if not m:
+        return None
+    d, mo, y = m.groups()
+    return f"20{y}-{mo}-{d}"
+
+
+def vhp_saja(dry_run=False):
+    """Mode ringan (workflow vhp-cek): hanya baca laporan VHP baru semua unit, tanpa email/IMAP.
+    arrival_pending mengirim maks. 10 file per panggilan -> diulang sampai habis (maks. 6x per unit)."""
+    for u in SEMUA_UNIT:
+        log(f"== Laporan VHP | {u}")
+        for _ in range(6):
+            try:
+                n = arrival_sync(u, dry_run)
+            except Exception as e:
+                log("   ~ laporan VHP gagal:", _e(e))
+                break
+            if not n:
+                break
+
+
 def arrival_sync(unit, dry_run=False):
     """Baca PDF yang di-upload FO di folder tanggal. Laporan VHP dikenali dari ISI file (nama file bebas)."""
     try:
         files = gas_post({"action": "arrival_pending", "unit": unit}).get("files", [])
     except Exception as e:
         log("   ~ cek laporan VHP gagal (dicoba lagi nanti):", _e(e))
-        return
+        return 0
     saved = 0
     for f in files:
         try:
@@ -1103,6 +1138,17 @@ def arrival_sync(unit, dry_run=False):
                     if out.get("unit") and out["unit"] != unit:
                         log("   ! Jurnal FO ini milik unit lain:", out["unit"])
                 continue
+            # 26 Nov 2026: Room Revenue Breakdown VHP -> dicatat jam upload-nya (status laporan Night Audit)
+            try:
+                rb = parse_rev_breakdown(data)
+            except Exception as e:
+                rb = None
+                log(f"   ~ baca Rev Breakdown gagal: {_e(e)}")
+            if rb:
+                log(f"   # {f['date']} {'(file)' if LOG_PUBLIK else f['name']}: Room Revenue Breakdown {rb}")
+                if not dry_run:
+                    gas_post({"action": "rev_bd_save", "unit": unit, "file_id": f["file_id"], "stamp": f["stamp"], "date": rb})
+                continue
             kind, rows = parse_arrival_pdf(data)
             log(f"   # {f['date']} {'(file)' if LOG_PUBLIK else f['name']}: " + (f"laporan VHP ({kind}), {len(rows)} tamu" if kind else "bukan laporan VHP"))
             if not dry_run:
@@ -1118,6 +1164,7 @@ def arrival_sync(unit, dry_run=False):
                 log("   ✉ email REVISI dikirim:", (f"{len(out['revisi'])} unit/tanggal" if LOG_PUBLIK else ", ".join(out["revisi"])))
         except Exception as e:
             log("   ~ kirim revisi gagal:", _e(e))
+    return len(files)
 
 
 # ----------------------------------------------------------------------------
@@ -1479,7 +1526,9 @@ def test_files(paths):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+    if "--vhp" in sys.argv:
+        vhp_saja(dry_run="--dry-run" in sys.argv)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--test":
         test_files(sys.argv[2:])
     else:
         run(dry_run="--dry-run" in sys.argv or os.environ.get("DRY_RUN") == "1")

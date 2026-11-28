@@ -1107,6 +1107,11 @@ def vhp_saja(dry_run=False):
                 break
             if not n:
                 break
+    if not dry_run:   # 28 Nov 2026: tanda pembacaan selesai -> notifikasi 06.30 hanya dikirim bila data sudah segar
+        try:
+            gas_post({"action": "vhp_selesai"})
+        except Exception as e:
+            log("   ~ tanda selesai gagal:", _e(e))
 
 
 def arrival_sync(unit, dry_run=False, revisi=True):

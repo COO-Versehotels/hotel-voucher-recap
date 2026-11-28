@@ -977,6 +977,12 @@ EA_ROW = re.compile(r"^\s*\d{1,3}\s+(?:(\S{1,5})\s+)?(\d{5,})\s+(?:\*\s+)?(.+?)\
                     r"(.*?)\s+(\d{2}/\d{2}/\d{2})\s+(\d{2}/\d{2}/\d{2})\s+(\d{2}/\d{2}/\d{2})\b(.*)$")
 EA_ARGT = {"RO", "RB", "BB", "HB", "FB", "AI", "RBB", "ROB"}   # kolom Arrangement (room only / room breakfast ...)
 EA_SEG = {"OTA", "FIT", "TA-FIT", "TA", "COR", "CORP", "GOV", "COMP", "HU", "GRP", "WALK", "WIG", "REG"}
+# 28 Nov 2026: format "INHOUSE GUEST LIST" (VHP Cirebon): No RmNo RmType Argt GuestName [Birth-Day Age] ... RoomRate RateCode ResNo A/C Nat
+# [Local Region] Company/TA CheckIn CheckOut ETA Segment CreateDate ** Comment
+IHL_ROW = re.compile(r"^\s*\d{1,3}\s+(\S{1,6})\s+(\S+)\s+(.+?)\s+(?:([\d,]{3,}(?:\.\d{2})?)\s+)?(?:((?!(?:Mr|Mrs|Ms|Miss|Mstr)\b)[^\s,]+(?:\s(?!(?:Mr|Mrs|Ms|Miss|Mstr)\b)[^\s,]+)?)\s+)?(\d{6})\s+\d+/\d+(?:\s+\d+)?\s+"
+                     r"([A-Za-z]{3})\s+(.*?)\s+(\d{2}/\d{2}/\d{2})\s+(\d{2}/\d{2}/\d{2})\b(.*)$")
+IHL_HEAD = re.compile(r"IN\s*HOUSE\s*GUEST\s*LIST", re.I)
+PERIOD_RE = re.compile(r"Period\s*:\s*(\d{2}/\d{2}/\d{2})", re.I)
 VHP_SOURCES = re.compile(r"^(\[[^\]]+\],?|TRAVELOKA\s+TERA|TRAVELOKA|AGODA|BOOKING\.COM|TIKET\.COM|TIKET|C-TRIP|CTRIP|TRIP\.COM|"
                          r"EXPEDIA|BOOKNLINK|BOOKANDLINK)\s*", re.I)
 VHP_REPORT = re.compile(r"Guest\s+Arrival\s+List|Resident\s+Guest\s+List|Departed\s+Guest\s+List|Guest\s+List|"
@@ -1020,6 +1026,16 @@ def parse_arrival_pdf(data):
     return best
 
 
+def vhp_period(data):
+    """Tanggal laporan dari ISI PDF ("Period : 27/11/26") -> 'yyyy-mm-dd' atau None. 28 Nov 2026: Guest In House yang
+    di-upload ke folder tanggal yang salah tetap dicatat untuk tanggal sesuai isinya."""
+    import pdfplumber
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        head = (pdf.pages[0].extract_text() or "")[:1500] if pdf.pages else ""
+    m = PERIOD_RE.search(head)
+    return _iso(m.group(1)) if m else None
+
+
 def _parse_vhp_text(text):
     rows = []
     head = text[:3000]
@@ -1028,7 +1044,28 @@ def _parse_vhp_text(text):
     kind = ("departed" if re.search(r"Departed|Check\s*-?\s*Out|VoucherNo", head, re.I) else
             "arrival" if re.search(r"Arrival\s+Guest\s+List", head, re.I) else
             "inhouse" if re.search(r"Resident|In\s*House", head, re.I) else "arrival")
+    ihl = bool(IHL_HEAD.search(head))
     for ln in text.splitlines():
+        if ihl:
+            m = IHL_ROW.match(ln)
+            if m:
+                rmno, rmtyp, mid, rate, _rcode, resno, _nat, comp, arr, dep, tail = m.groups()
+                tok = mid.split()
+                # Argt (RO/RB/...) kadang terpisah angka ("RB 1"); tanggal lahir + umur di belakang nama dibuang
+                while tok and (re.fullmatch(r"[A-Z]{2,3}\d?", tok[0]) and tok[0].rstrip("0123456789") in EA_ARGT):
+                    tok = tok[1:]
+                    if tok and re.fullmatch(r"\d", tok[0]):
+                        tok = tok[1:]
+                tok = [x for x in tok if not re.fullmatch(r"\+?\d{8,}", x) and "@" not in x]   # kolom Phone & Email
+                name = re.sub(r"\s+\d{2}/\d{2}/\d{4}(\s+\d{1,3})?\s*$", "", " ".join(tok)).strip().rstrip(",").strip()
+                comp = comp.strip()
+                if not (comp.startswith("[") or VHP_SOURCES.match(comp)) and " " in comp:
+                    comp = comp.split(" ", 1)[1]   # kolom Local Region (mis. "Cirebon") sebelum Company/TA
+                cm = re.search(r"\*\*\s*(.*)$", tail)
+                rows.append({"resno": resno, "tamu": name, "arrival": _iso(arr), "depart": _iso(dep), "tipe": rmtyp,
+                             "kamar": rmno, "sumber": comp.strip().strip(",").strip(), "catatan": cm.group(1).strip() if cm else "",
+                             "rate": to_number(rate) if rate else None})
+            continue
         m = DEP_ROW.match(ln) if kind == "departed" else None
         if m:
             resno, mid, arr, dep, qty, rmtyp, rmno, rest = m.groups()
@@ -1155,9 +1192,18 @@ def arrival_sync(unit, dry_run=False, revisi=True):
                     gas_post({"action": "rev_bd_save", "unit": unit, "file_id": f["file_id"], "stamp": f["stamp"], "date": rb})
                 continue
             kind, rows = parse_arrival_pdf(data)
-            log(f"   # {f['date']} {'(file)' if LOG_PUBLIK else f['name']}: " + (f"laporan VHP ({kind}), {len(rows)} tamu" if kind else "bukan laporan VHP"))
+            tgl = f["date"]
+            if kind == "inhouse" and rows:
+                try:
+                    per = vhp_period(data)
+                except Exception:
+                    per = None
+                if per and per != tgl:
+                    log(f"   ~ Guest In House ada di folder {tgl}, isinya tanggal {per} -> dicatat untuk {per}")
+                    tgl = per
+            log(f"   # {tgl} {'(file)' if LOG_PUBLIK else f['name']}: " + (f"laporan VHP ({kind}), {len(rows)} tamu" if kind else "bukan laporan VHP"))
             if not dry_run:
-                gas_post({"action": "arrival_save", "unit": unit, "date": f["date"], "file_id": f["file_id"],
+                gas_post({"action": "arrival_save", "unit": unit, "date": tgl, "file_id": f["file_id"],
                           "stamp": f["stamp"], "rows": rows, "is_report": bool(kind and rows), "kind": kind})
                 saved += 1 if (kind and rows) else 0
         except Exception as e:

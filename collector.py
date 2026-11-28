@@ -1151,6 +1151,35 @@ def vhp_saja(dry_run=False):
             log("   ~ tanda selesai gagal:", _e(e))
 
 
+NA_NAMA = re.compile(r"in\s*house|inhouse|resident|rev(enue)?|breakdown|jurnal|journal", re.I)
+
+
+def _cek_pdf(data):
+    """28 Nov 2026: '' bila PDF bisa dibuka; 'kosong' (0 KB) / 'password' (terkunci) / 'rusak'."""
+    import pdfplumber
+    if not data:
+        return "kosong"
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            if pdf.pages:
+                pdf.pages[0].extract_text()
+        return ""
+    except Exception:
+        return "password" if b"/Encrypt" in data else "rusak"
+
+
+def na_masalah(unit, f, masalah, dry_run, lapor=True, isi=None):
+    """Lapor file laporan Night Audit bermasalah ke Apps Script (kartu Night Audit + notifikasi). File ditandai sudah dibaca."""
+    log(f"   ! {f['date']} {'(file)' if LOG_PUBLIK else f.get('name')}: {masalah}" + (f" (isi {isi})" if isi else "") +
+        ("" if lapor else " - bukan laporan Night Audit, dilewati"))
+    if not dry_run:
+        try:
+            gas_post({"action": "na_masalah", "unit": unit, "date": f["date"], "file_id": f["file_id"], "stamp": f["stamp"],
+                      "name": f.get("name", ""), "masalah": masalah, "isi": isi or "", "lapor": bool(lapor)})
+        except Exception as e:
+            log("   ~ lapor file bermasalah gagal:", _e(e))
+
+
 def arrival_sync(unit, dry_run=False, revisi=True):
     """Baca PDF yang di-upload FO di folder tanggal. Laporan VHP dikenali dari ISI file (nama file bebas)."""
     try:
@@ -1162,6 +1191,10 @@ def arrival_sync(unit, dry_run=False, revisi=True):
     for f in files:
         try:
             data = base64.b64decode(f["pdf_base64"])
+            masalah = _cek_pdf(data)
+            if masalah:   # kosong / terkunci password / rusak -> lapor bila namanya laporan Night Audit, lalu tidak dicoba ulang
+                na_masalah(unit, f, masalah, dry_run, lapor=bool(NA_NAMA.search(f.get("name", ""))))
+                continue
             # 25 Nov 2026: Jurnal FO VHP (F/O Journal Transaction) -> tab Jurnal FO (Laporan Transaksi FO)
             try:
                 jr = parse_jurnal_pdf(data)
@@ -1188,6 +1221,8 @@ def arrival_sync(unit, dry_run=False, revisi=True):
                 log(f"   ~ baca Rev Breakdown gagal: {_e(e)}")
             if rb:
                 log(f"   # {f['date']} {'(file)' if LOG_PUBLIK else f['name']}: Room Revenue Breakdown {rb}")
+                if rb != f["date"]:
+                    na_masalah(unit, f, "beda_tanggal", dry_run, isi=rb)
                 if not dry_run:
                     gas_post({"action": "rev_bd_save", "unit": unit, "file_id": f["file_id"], "stamp": f["stamp"], "date": rb})
                 continue
@@ -1200,7 +1235,10 @@ def arrival_sync(unit, dry_run=False, revisi=True):
                     per = None
                 if per and per != tgl:
                     log(f"   ~ Guest In House ada di folder {tgl}, isinya tanggal {per} -> dicatat untuk {per}")
+                    na_masalah(unit, f, "beda_tanggal", dry_run, isi=per)
                     tgl = per
+            elif kind == "inhouse" and not rows:   # Guest In House dengan format yang belum dikenali -> beri tahu COO
+                na_masalah(unit, f, "format", dry_run)
             log(f"   # {tgl} {'(file)' if LOG_PUBLIK else f['name']}: " + (f"laporan VHP ({kind}), {len(rows)} tamu" if kind else "bukan laporan VHP"))
             if not dry_run:
                 gas_post({"action": "arrival_save", "unit": unit, "date": tgl, "file_id": f["file_id"],
